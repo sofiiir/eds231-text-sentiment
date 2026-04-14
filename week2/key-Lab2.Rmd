@@ -1,9 +1,15 @@
 ---
-title: "Lab 2: Text Analysis of Nexis Uni Data"
+title: "Lab: Text Analysis of Nexis Uni Data"
 subtitle: "Data Center News Coverage"
 date: "`r Sys.Date()`"
 output:
-  html_document
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
 ---
 
 ```{r setup, include=FALSE}
@@ -32,7 +38,7 @@ In this lab you will work with a corpus of news articles about data centers. The
 ```{r packages}
 library(tidyverse)      # data wrangling and plotting
 library(tidytext)       # text mining in tidy format
-#library(LexisNexisTools) # reading Nexis Uni.docx exports
+#library(LexisNexisTools) # reading Nexis Uni .docx exports
 library(SnowballC)      # Porter stemmer
 library(textstem)       # lemmatization
 library(scales)         # axis formatting
@@ -62,15 +68,13 @@ I used the `{LexisNexisTools}` package to parse `.docx` exports from Nexis. It r
 #   recursive = TRUE,
 #   ignore.case = TRUE
 # )
-# # read in the data obejct
+# 
 # pre_dat <- lnt_read(pre_files)
 # 
-# # access the subdata frames
 # pre_meta_df       <- pre_dat@meta
 # pre_articles_df   <- pre_dat@articles
 # pre_paragraphs_df <- pre_dat@paragraphs
 # 
-# # access the data 
 # df <- tibble(
 #   date     = pre_meta_df$Date,
 #   headline = pre_meta_df$Headline,
@@ -79,9 +83,15 @@ I used the `{LexisNexisTools}` package to parse `.docx` exports from Nexis. It r
 #   source   = pre_meta_df$Newspaper
 # )
 
+# Remove wire-service sources that appear as duplicate syndicated content
+df <- df |>
+  filter(!source %in% c(
+    "National Post (f/k/a The Financial Post) (Canada)",
+    "Postmedia Breaking News"
+  ))
 
-url <- "https://raw.githubusercontent.com/MaRo406/EDS-231-text-sentiment/refs/heads/main/data/nexis-dat.csv"
-df <- read_csv(url)
+url <- "https://raw.githubusercontent.com/MaRo406/EDS-231-text-sentiment/refs/heads/main/data/"
+results <- read_csv(url)
 ```
 
 ### 1.1 Cleaning the raw text
@@ -90,7 +100,7 @@ Before any analysis, the raw Nexis export needs cleaning. Each step below addres
 
 ```{r clean-text}
 # Drop articles with no date — these are often metadata rows, not real articles
-df <- df[!is.na(df$date),]
+df <- df[!is.na(df$date), ]
 
 # Remove URLs — Nexis embeds source URLs inline in the text body
 df$text <- gsub("https?\\S+", "", df$text)
@@ -107,19 +117,15 @@ df$text <- gsub("'s\\b", "", df$text, ignore.case = TRUE)
 
 ```{r inspect}
 glimpse(df)
-
-cat("\nDate range:", format(min(df$date)),"to", format(max(df$date)), "\n")
+cat("\nDate range:", format(min(df$date)), "to", format(max(df$date)), "\n")
 cat("Unique sources:", n_distinct(df$source), "\n")
 cat("Total articles:", nrow(df), "\n")
 ```
-There are 558 rows corresponding with 558 articles. 
-
-Do some publications write about data centers more than others? 
 
 ```{r articles-per-source}
 df |>
-  count(source, sort = T) |> #
-  filter(n > 10, source != "") |> #
+  count(source, sort = TRUE) |>
+  filter(n > 10, source != "") |>
   ggplot(aes(x = reorder(source, n), y = n)) +
   geom_col(fill = "#2c7bb6") +
   coord_flip() +
@@ -132,25 +138,25 @@ df |>
 
 ## 2. Tokenization
 
-The core `tidytext` workflow converts documents into a **one-token-per-row** format using `unnest_tokens()`. This makes every subsequent step a standard `dplyr` pipeline.  We'll select our columns of interest in df, then unnest the tokens (at the word level).
+The core `tidytext` workflow converts documents into a **one-token-per-row** format using `unnest_tokens()`. This makes every subsequent step a standard `dplyr` pipeline ##— you can filter, join, and count tokens using the same verbs you already know.##
 
 ```{r tokenize}
 tokens <- df |>
-  select(id, date, source, text) |> 
+  select(id, date, source, text) |>
   unnest_tokens(
-    output = word,
-    input = text,
-    token = "words"
+    output = word,    # name of the new token column
+    input  = text,    # column containing text
+    token  = "words"  # tokenize by word (also: "sentences", "ngrams")
   )
 
-
 glimpse(tokens)
-cat("\nTotal tokens:", nrow(tokens) , "\n")
+cat("\nTotal tokens:", nrow(tokens), "\n")
 cat("Unique tokens:", n_distinct(tokens$word), "\n")
 ```
 
 **Discussion:** What does `unnest_tokens()` do to case and punctuation by default?
-All of the words are lower cased and the punctuation has been removed. 
+
+<!-- **Answer:** It lowercases all tokens and strips punctuation. The implication is that "Data", "data", and "DATA" all become the same token — which is usually what you want, but means you lose information about proper nouns and sentence-initial capitalization. Punctuation removal means contractions like "don't" become "don" and "t", so pre-tokenization cleaning  matters. barry divine? (like replacing periods above) -->
 
 ------------------------------------------------------------------------
 
@@ -158,12 +164,12 @@ All of the words are lower cased and the punctuation has been removed.
 
 ### 3.1 Standard Stopwords
 
-Recall that `tidytext` ships with several stopword lexicons via `get_stopwords()`. The most comprehensive built-in option is the SMART list, which covers around 570 high-frequency function words and is well-suited for news and document analysis. Let's load the SMART words and remove them from our tokens.
+Recall that `tidytext` ships with several stopword lexicons via `get_stopwords()`. The most comprehensive built-in option is the SMART list, which covers around 570 high-frequency function words and is well-suited for news and document analysis.
 
 ```{r standard-stopwords}
 standard_sw <- get_stopwords(source = "smart", )
 
-tokens_clean <- tokens |> 
+tokens_clean <- tokens |>
   anti_join(standard_sw, by = "word")
 
 cat("Tokens after standard stopword removal:", nrow(tokens_clean), "\n")
@@ -189,40 +195,46 @@ tokens_clean |>
   theme_minimal(base_size = 12)
 ```
 
-**Step 2: Build a domain stopword list from what we observe.**
+**Step 2: Build a domain stopword list from what you observe.**
 
-Look at the plot above. Add words that are frequent but analytically uninformative for your research question. Can you identify anything that we should remove?
+Look at the plot above. Add words that are frequent but analytically uninformative for your research question. Can you identify anthing that we should remove?
 
+<!-- -   Attribution words: *said*, *says*, *told*, *according* -->
+
+<!-- -   Generic news terms: *company*, *year*, *percent*-->
+
+<!-- -   Data center boilerplate: *data*, *center*, *centers* (if you want to analyze what's *around* the topic, not the topic label itself) -->
 
 ```{r domain-stopwords}
 domain_sw <- tibble(word = c(
- # News wire / attribution boilerplate
+  # News wire / attribution boilerplate
   "said", "says", "told", "according", "reported", "noted", "added",
   "stated", "announced", "mr", "ms", "inc", "corp", "llc",
   # Generic quantitative terms ##(adjust based on your research question)
   "year", "years", "percent", "million", "billion", "quarter",
-  "company", "companies", "firm", "business", # could include this based on the question 
-  # Consider whether these are substantive for our RQ:
-  "data", "center", "centers" 
+  "company", "companies", "firm", "business",
+  # Consider whether these are substantive for your RQ:
+  "data", "center", "centers"  # remove if treating as boilerplate
 ))
-
 
 tokens_clean2 <- tokens_clean |>
   anti_join(domain_sw, by = "word") |>
   filter(
-        !str_detect(word, "^[0-9]+$"), #remove pure digit tokens
-          str_length(word) > 2         #remove very short tokens
+    !str_detect(word, "^[0-9]+$"),  # remove pure numbers, ^ is start string, $ is end, [0-9]+ is one or more digits ([0-9] is character class meaning digit, + means 1 or more)
+    str_length(word) > 2            # remove very short tokens
   )
 
 cat("Tokens after domain stopword removal:", nrow(tokens_clean2), "\n")
 cat("Reduction from raw:", scales::percent(1 - nrow(tokens_clean2) / nrow(tokens)), "\n")
 ```
 
+**Exercise:** Inspect the frequency plot again after domain stopword removal. Are there additional terms you would add? What is your criterion for inclusion?
+
 ------------------------------------------------------------------------
 
 ## 4. Stemming and Lemmatization
 
-Both stemming and lemmatization reduce words to a base form to consolidate variant spellings. They differ in approach and output. We'll just run the code in 4. as a demonstration of these tools.
+Both stemming and lemmatization reduce words to a base form to consolidate variant spellings. They differ in approach and output.
 
 ### 4.1 Stemming (Porter Stemmer)
 
@@ -271,7 +283,7 @@ tokens_clean2 |>
   knitr::kable(caption = "Stemming vs. lemmatization comparison")
 ```
 
-**Discussion:** Which approach would you choose for this corpus, and why? 
+**Question:** Which approach would you choose for this corpus, and why? *Consider your downstream analysis tasks — frequency counts benefit from lemmatization (real words are easier to interpret), while keyness analysis is less sensitive to the choice since both corpora are treated the same way.*
 
 For the rest of this lab we will use **lemmatized** tokens.
 
@@ -288,7 +300,9 @@ working_tokens <- tokens_lemmatized |>
 ### 5.1 Overall Frequency
 
 ```{r freq-plot}
-top_words <- 
+top_words <- working_tokens |>
+  count(word, sort = TRUE) |>
+  slice_head(n = 30)
 
 top_words |>
   ggplot(aes(x = reorder(word, n), y = n)) +
@@ -308,11 +322,14 @@ top_words |>
 Raw frequency across the whole corpus can mask differences between outlets. This plot shows each source's top 10 terms independently — useful for spotting whether specific publications drive particular terms in the overall frequency list.
 
 ```{r freq-by-source}
-top_sources <- 
+top_sources <- df |>
+  count(source, sort = TRUE) |>
+  slice_max(n, n = 10) |> #select rows with largest values
+  pull(source) #extract source column only
 
 working_tokens |>
   filter(source %in% top_sources) |>
-  count(source, word, sort = TRUE) |>
+  count(source, word, sort = TRUE) |> #ungroup,transform,group allows calculations but maintain row structure
   group_by(source) |>
   slice_max(n, n = 10) |>
   ungroup() |>
@@ -337,9 +354,7 @@ We use `quanteda` for this because `tidytext` doesn't implement keyness statisti
 
 ```{r build-dfm}
 # Build corpus — quanteda uses character doc IDs, so id (integer) is coerced
-corp <- corpus(df, docid_field = "id", text_field = "text") 
-
-# Create a new document variable (year) from date
+corp <- corpus(df, docid_field = "id", text_field = "text") #Where our tidy tokens had one row per token, a DFM has one row per document and one column per unique token, with cell values being token counts.
 docvars(corp, "year") <- format(df$date, "%Y")
 
 # Tokenize inside quanteda: remove punctuation, numbers, symbols; lowercase
@@ -389,7 +404,7 @@ textplot_keyness(result, n = 20) +
 
 *Create a new .Rmd file for your submission. Use the lab code as a reference, but your submission should contain only your own analysis — not the demo walkthrough. For the submission, answer each of the questions in part 7 and part 8 below.*
 
-## 7. Interpretive questions:
+## **7. Interpretive questions:**
 
 1.  What do the most positive keywords (overrepresented in 2025) tell you about how data center coverage has shifted?
 
