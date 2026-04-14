@@ -1,10 +1,10 @@
 ---
 title: "Assignment 1- NYT database exploration"
-output: html_document
+output: "word_document"
 author: Sofia Rodas
 ---
 
-# Exploring Sea Level Rise as a topic in the New York Times
+# Exploring the appearance of the phrase "Sea Level Rise" in the New York Times
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -21,7 +21,7 @@ library(patchwork)
 
 ```{r API-key, include=FALSE}
 # assign NYT Dev  API key
-
+API_KEY <- Sys.getenv("NYT_KEY")
 ```
 
 
@@ -77,6 +77,7 @@ write.csv(results, paste0("NYT-", term1,".csv"))
 nytDat <- results
 ```
 
+Note: For future use the saved file can be accessed. The sourcing of snippets and headers should be changed if the saved file is used. The snippets are changed from being sourced at 3 to 4 and headlines are changed from being sourced at 4 to 5. 
 
 3.  Recreate the publications per day and word frequency plots using the snippets.
 
@@ -94,11 +95,12 @@ publication_dates_graph <- nytDat |>
   geom_bar(aes(x=reorder(pubDay, count), y=count), stat="identity") +
   coord_flip() +
   theme_minimal() + 
-  labs(title = "Count of New York Times articles on Sea Level Rise from April 2024-April 2026",
+  labs(title = "Frequency of New York Times articles on Sea Level Rise",
+       subtitle = "April 2024-April 2026",
        y = "Count",
        x = "Publication date")
 
-#show the publication dates graph
+# show the publication dates graph
 publication_dates_graph
 ```
 
@@ -106,7 +108,7 @@ Climate week NYC took place from September 19, 2025 to September 29, 2025. Septe
 
 ### Tokenization of the snippets
 
-The snippets are 
+The snippets are stored in the 3rd column of the dataframe. Here we reassign the snippets and tokenize them. 
 ```{r plot_frequencies}
 # save the snippets from the accessed data
 snippet <-  names(nytDat)[3]
@@ -115,22 +117,23 @@ snippet <-  names(nytDat)[3]
 tokenized <- nytDat |> 
   unnest_tokens(word, snippet)
 ```
+
 All of the filler words are still present. Let's remove the filler words.
 
 ### Clean the tokenized snippets
-```{r stop-words}
-
+```{r clean-tokenized-snippets}
+# access the stop words
 data(stop_words)
 stop_words
 
- # remove stop words
+# remove stop words from snippets
 tokenized <- tokenized |> 
   anti_join(stop_words)
 
-#remove all numbers
+# remove numbers from snippets
 clean_tokens <- str_remove_all(tokenized$word, "[:digit:]") 
 
-# remove possessives
+# remove possessives from snippets
 clean_tokens <- gsub("’s", '', clean_tokens) 
 
 tokenized$clean <- clean_tokens
@@ -138,8 +141,8 @@ tokenized$clean <- clean_tokens
 # drop where clean is empty
 tokenized <- tokenized |> filter(clean != "")
 
-# drop they're (for some reason this isn't being dropped with the stop words)
-tokenized <- tokenized |> filter(clean != "they're")
+# drop they're (the type of apostrophe stops it from being dropped with the stop words)
+tokenized <- tokenized |> filter(clean != "they’re")
 
 # visualize the most used words
 snippet_graph <- tokenized |> 
@@ -148,7 +151,8 @@ snippet_graph <- tokenized |>
   mutate(clean = reorder(clean, n)) |> 
   ggplot(aes(n, clean)) +
   geom_col() +
-  labs(title = "Word frequencies in NYT article snippets about Sea Level Rise",
+  labs(title = "Top word frequencies",
+       subtitle = "NYT snippets about sea level rise ",
        y = NULL,
        x = "Count") + 
   theme_minimal()
@@ -160,30 +164,35 @@ snippet_graph
 4.  Recreate the publications per day and word frequency plots using the headlines variable (response.docs.headline.main). Compare the distributions of word frequencies between the snippet and headlines. Do you see any differences? Why might this be?
 
 
-Visualize the number of publications discussing sea level rise and the dates of each publication. The API searches based on both headlines and snippets so the dates are the same for both headlines and snippets. 
+####Visualize the number of publications discussing sea level rise and the dates of each publication. 
 
-```{r date-plot}
+The API searches for the search term within on both headlines and snippets and retrieves the headlines and snippets for all of the hits. Therefore all of the dates are the same for both headlines and snippets. The publication date graphs are constructed using the exact same formatting. 
+
+```{r date-plot-2}
 publication_headline_graph <- nytDat |> 
   mutate(pubDay = as.Date(created_time)) |> 
   group_by(pubDay) |> 
   summarise(count=n()) |> 
   filter(count >= 2) |> 
   ggplot() +
-  geom_bar(aes(x=reorder(pubDay, count), y=count), stat="identity") +
+  geom_bar(aes(x=reorder(pubDay, count), y=count), 
+           stat="identity",
+           fill = "black") +
   coord_flip() +
   theme_minimal() + 
-  labs(title = "Count of New York Times articles on Sea Level Rise from April 2024-April 2026",
+  labs(title = "Frquency of New York Times articles on Sea Level Rise",
+       subtitle = "April 2024-April 2026",
        y = "Count",
        x = "Publication date")
 
 # show the headline date graph
 publication_headline_graph
 ```
-The dates of publication are the same 
 
 ### Tokenization of the headlines
 
-```{r plot_frequencies}
+The headlines are stored in the fourth column when accessing them from the API returned data.
+```{r tokenize-headlines}
 # save the headlines from the accessed data
 headlines <-  names(nytDat)[4]
 
@@ -193,8 +202,8 @@ headlines_tokenized <- nytDat |>
 ```
 
 ### Clean the tokenized headlines
-```{r stop-words}
-
+```{r clean-tokenized-headlines}
+# access the stop words
 data(stop_words)
 stop_words
 
@@ -214,14 +223,15 @@ headlines_tokenized$clean <- clean_headlines_tokens
 headlines_tokenized <- headlines_tokenized |> filter(clean != "")
 
 
-# visualize the most used words
+# visualize the most used words for headlines
 headlines_graph <- headlines_tokenized |> 
   count(clean, sort = TRUE) |> 
   filter(n > 5) |> 
   mutate(clean = reorder(clean, n)) |> 
   ggplot(aes(n, clean)) +
-  geom_col() +
-  labs(title = "Word frequencies in NYT article headlines about Sea Level Rise",
+  geom_col(fill = "black") +
+  labs(title = "Top word frequencies",
+       subtitle = "NYT headlines about sea level rise",
        y = NULL,
        x = "Count") + 
   theme_minimal()
@@ -229,17 +239,19 @@ headlines_graph <- headlines_tokenized |>
 # show the headlines graph
 headlines_graph
 ```
-Compare the graphs from showing the most words that show up in the snippets versus the headlines.
+## Publication date comparison 
 
-```{r}
+```{r publication-date-comparison}
 publication_dates_graph + publication_headline_graph
 ```
 As described above, based on the way the function is written, the API searches for the search term in both the headlines and the snippets and returns both of the corpus and the publication dates. Hence the publication dates are the same whether looking at them for the snippets of the headlines. 
 
-```{r}
+## Compare the graphs showing the frequency of words in snippets versus headlines
+
+```{r word-frequency-comparison}
 snippet_graph + headlines_graph
 ```
-There are many more words with a count larger than 5 when analyzing snippets compared to the number of words with a count larger than 5 when analyzing headlines. This makes sense since snippets are more text than headlines. The word climate, change, and trump are found more than 5 times in both the snippets and the headlines. The remaining words still revolve around the topic of sea level rise but are not included as found more than 5 times in both instances. 
+There are many more words with a count larger than 5 when analyzing snippets compared to the number of words with a count larger than 5 when analyzing headlines. This makes sense since snippets are more text than headlines. The words "climate", "change", and "trump" are found more than 5 times in both the snippets and the headlines. The remaining words still revolve around the topic of sea level rise. The words other than "climate", "change", and "trump" either appeared only more than 5 times in the snippets or the headlines. 
 
 Submit finished labs in both .Rmd and knitted PDF or html form to Canvas.
 

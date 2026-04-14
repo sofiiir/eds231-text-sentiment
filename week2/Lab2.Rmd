@@ -288,7 +288,9 @@ working_tokens <- tokens_lemmatized |>
 ### 5.1 Overall Frequency
 
 ```{r freq-plot}
-top_words <- 
+top_words <- working_tokens |>
+  count(word, sort = TRUE) |>
+  slice_head(n = 30)
 
 top_words |>
   ggplot(aes(x = reorder(word, n), y = n)) +
@@ -308,7 +310,10 @@ top_words |>
 Raw frequency across the whole corpus can mask differences between outlets. This plot shows each source's top 10 terms independently — useful for spotting whether specific publications drive particular terms in the overall frequency list.
 
 ```{r freq-by-source}
-top_sources <- 
+top_sources <- df |>
+  count(source, sort = TRUE) |>
+  slice_max(n, n = 10) |> #select rows with largest values
+  pull(source) #extract source column only
 
 working_tokens |>
   filter(source %in% top_sources) |>
