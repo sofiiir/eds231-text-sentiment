@@ -150,6 +150,7 @@ cat("Unique tokens:", n_distinct(tokens$word), "\n")
 ```
 
 **Discussion:** What does `unnest_tokens()` do to case and punctuation by default?
+
 All of the words are lower cased and the punctuation has been removed. 
 
 ------------------------------------------------------------------------
@@ -271,7 +272,9 @@ tokens_clean2 |>
   knitr::kable(caption = "Stemming vs. lemmatization comparison")
 ```
 
-**Discussion:** Which approach would you choose for this corpus, and why? 
+**Discussion:** Which approach would you choose for this corpus, and why?
+
+I would choose the lemmatization. The output is more clear. Without context and investigation of the stem outputs `oper` would be unuable as a frequency word. 
 
 For the rest of this lab we will use **lemmatized** tokens.
 

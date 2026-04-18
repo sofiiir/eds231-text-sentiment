@@ -1,0 +1,157 @@
+---
+title: "HW 2 Lemmatization and keyness"
+output: html_document
+author: Sofia Rodas
+---
+
+
+## 7. Interpretive questions:
+
+1.  What do the most positive keywords (overrepresented in 2025) tell you about how data center coverage has shifted?
+
+    *Though personally I don't see any overtly positive words in the 2025 keyness terms, depending on the interpreter, AI and ChatGPT could be viewed as positive. Some might correlate these tools with innovation. Though undoubtedly they are innovative tools there are debates about whether these tools will be more detrimental to society and the environment than positive. The conversation about data centers from 2021 to 2025 has shifted from more abstract to real world data center implications. As someone who is overall hesitant to embrace AI, I see the words from 2025 as negative such as energy which likely discusses the vast amount of energy usage by data centers. The connotation of these words largely depends on context.*
+
+2.  Are any of these keywords surprising? What might explain their appearance?
+
+    *The most surprising thing about the keywords is how many proper names are included in the 2025. In 2021, there was only two proper names included in the keyness word list, "lakewood" and "hoffman". "Lakewood" likely refers to the data center in Colorado. "Hoffman" most likely refers to a research center. Overall, in 2021 the conversation was more general. In 2025, some key players dominate the conversation around data centers. There are 5 proper names included! "Trump", "Douthat", "Bannon", "Altman", and "Marcos" all of which I had to look up (other than trump). It's interesting that their views vary between positive and negative. I find the inclusion of "marcos" most interesting because presumably it relates to the proposal to build a data center in San Marcos, Texas which was ultimately rejected.*
+
+3.  Keyness flags statistical unusualness, not substantive importance. A high-G² word could be driven by a single prolific source or a short news spike. How would you check whether a keyword is genuinely distributed across the corpus rather than concentrated in one place?
+
+    *In addition to the keyness plot, I would make a plot that takes the word keyness list and shows its frequency across the time scale and across the different data sources. This would show whether only one source or one event is making this a prolific keyword. I would then drop any keywords that appear only in one source or from only one short time period.*
+
+4.  How has the language used to describe data centers in news coverage changed over time, and what does that suggest about the evolving journalistic frame around the issue?
+
+    *The shift in the tone of words shows the shift in societal sentiment about data centers. In 2021, the word "security" is within the top keyness words. The other words are generally neutral from the 2021 keyness words. Data centers were optional infrastructure for us as a society. Shift to 2025 AI is one of the dominating words. This reflects that now they are seen as necessary infrastucture to maintain a functioning society. 
+    
+    As mentioned above the conversation in 2021, has many fewer proper names. The conversation was more general in 2021, and more abstract as these conversations were not as prolific in our everyday venacular. In 2025, the conversation is tied to individuals that dominate the conversation. Individuals that certain groups of people hold as "experts" in the space of data centers.*
+
+------------------------------------------------------------------------
+
+## 8. Exercises
+
+1.  **Stopword sensitivity:** Remove *all* domain-specific stopwords and re-run the frequency plot. Then add 10 more domain stopwords beyond what was provided. 
+
+Read in files from lab2 .RMD.
+```{r, child = "Lab2.Rmd", include = False, output = False}
+working_tokens
+```
+Recreate the figure for the top 30 words in data center query after domain word removal.
+```{r stopword-sensitivity}
+# original top 30 word frequency removing all domain words
+after_domain_removal <- working_tokens |> 
+  count(word, sort = TRUE) |>
+  slice_head(n = 30) |>
+  ggplot(aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "#d7191c") +
+  coord_flip() +
+  labs(title = "Top 30 Words (after domain-word removal)",
+       x = NULL, y = "Count") +
+  theme_minimal(base_size = 12)
+    after_domain_removal
+```
+Remove an additional set of words and recreate the 30 most frequent words plot. 
+```{r}
+library(patchwork)
+
+# add ten more stopwords
+domain_sw <- tibble(word = c(
+ # words that don't mean anything out of context
+  "thing", "include", "make", "anytime", "partly", "intend", "hand", "people", "project",
+ # linking words
+ "similarly", 
+ # words inherent to the discussion of data centers
+ "industry", 
+ # a number that wasn't removed (maybe due to a different comma (?))
+ "715,661"
+))
+
+tokens_w_removals <- working_tokens |> 
+  anti_join(domain_sw, by = "word")
+
+after_add_removal <- tokens_w_removals |> 
+  count(word, sort = TRUE) |>
+  slice_head(n = 30) |>
+  ggplot(aes(x = reorder(word, n), y = n)) +
+  geom_col(fill = "hotpink") +
+  coord_flip() +
+  labs(title = "Top 30 Words (after additional word removal)",
+       x = NULL, y = "Count") +
+  theme_minimal(base_size = 12)
+
+after_domain_removal + after_add_removal
+```
+How do your results change? *What does this tell you about the analytical choices embedded in preprocessing?*
+
+    *The list of top 30 words in the data center query does not change unless a word that was already in the top 30 was removed. The only word I removed from the top 30 most frequent words is "project". Instead of "project", "demand" was included instead at the end of the list of 30 most frequent words. *
+
+
+2.  **Alternative keyness comparison:** Instead of comparing time periods, compare the two sources with the most articles. What does keyness reveal about how each publication frames the data center beat?
+
+    *Your answer here*
+    
+Read in files from lab2.RMD.
+```{r, child = "Lab2.Rmd", include = False, output = False}
+df
+```
+    
+```{r}
+# calculate source with most articles
+top_articles <- df |>
+  count(source, sort = TRUE)
+
+# build corpus — quanteda uses character doc IDs, so id (integer) is coerced
+corp <- corpus(df, docid_field = "id", text_field = "text") 
+
+# tokenize inside quanteda: remove punctuation, numbers, symbols; lowercase
+toks <- tokens(corp,
+               remove_punct   = TRUE,
+               remove_numbers = TRUE,
+               remove_symbols = TRUE) |>
+  tokens_tolower() |>
+  tokens_remove(stopwords("en", source = "smart") ) #
+
+# build DFM and drop any documents with no source
+dfmat <- dfm(toks)
+dfmat <- dfmat[!is.na(docvars(dfmat, "source")), ]
+
+cat("DFM dimensions:", nrow(dfmat), "documents ×", ncol(dfmat), "features\n")
+```
+
+
+```{r define-groups}
+cat("Top source:", top_articles$source[1], "\n")
+cat("Second-top source:", top_articles$source[2], "\n")
+
+# Collapse DFM to two rows — one per year value
+dfmat_grouped <- dfm_group(dfmat, groups = source)
+
+```
+
+```{r alternative-keyness}
+result <- textstat_keyness(dfmat_grouped,
+                           target  = "CE Noticias Financieras English",
+                           measure = "lr")
+
+textplot_keyness(result, n = 20) +
+  labs(
+    title = "Keyness: Data Center Coverage",
+    subtitle = "Target: CE Noticias Financieras English  |  Reference: The New York Times  |  Statistic: Log-Likelihood (G²)"
+  )
+```
+What does keyness reveal about how each publication frames the data center beat (best?)?
+
+    *CE Noticias Financieras English is a news publication for Spain, Portugal, and Latin America. CE Noticias Financieras English frames their news topics around their locations of interest, hence, many Spanish speaking nations are included in the keywords for this news source. Though this may seem less useful, this data simply needs additional wrangling to make it equitably usable. Some of the words included in the keywords seem to be bad translations from Spanish or a similar error. As a native Spanish speaker, I feel strongly that these tools could be deployed more equitably to encompass nuances of other languages. Employing more bilingual, multinational individuals to data science roles would be the first step to changing the functioning of baseline packages. 
+    
+    Similarly, The New York Times is equally concerned with the happenings in the US as is evident by the top keyword being trump. Other individuals who are considered experts in the topic in the US are also included in the keywords list in The New York Times.
+    
+    Overall, each news source writes about the areas from which their readers/viewers reside.*
+    
+3.  **Bigrams:** Use `unnest_tokens(token = "ngrams", n = 2)` to extract bigrams. What are the 20 most frequent bigrams? Do they reveal entities or conceptual phrases that single-token analysis misses?
+
+    *Your answer here*
+
+    ```{r bigrams}
+
+    ```
+
+------------------------------------------------------------------------
