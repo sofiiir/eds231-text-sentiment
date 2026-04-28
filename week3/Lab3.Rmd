@@ -75,10 +75,20 @@ library(remotes)
 Now search for posts on an environmental keyword. We'll use `"climate change"` as the default — feel free to swap in another term relevant to your interests.
 
 ```{r search}
-# raw_posts <- search_post("climate change", limit = 1000) #you'll do this later
+# # call the user and password from the environment
+# auth(
+# user = Sys.getenv("BSKY_USER")
+# pass = Sys.getenv("BSKY_PASS"))
+# 
+# # query bluesky for sea level rise posts
+# raw_posts <- search_post("sea level rise", limit = 1000)
 
-raw_posts <- read.csv("https://raw.githubusercontent.com/MaRo406/EDS-231-text-sentiment/refs/heads/main/data/bluesky_climate_raw.csv")
+raw_posts <- read_csv("bluesky-sealevelrise.csv")
 
+```
+Save the sea level rise file so we don't need to query every time we run this file. 
+```{r}
+# write_csv(raw_posts, file = "bluesky-sealevelrise.csv")
 ```
 
 
@@ -135,24 +145,24 @@ tokens_clean <- posts |>
 # pass 2: custom stop words and additional cleaning
 custom_sw <- tibble(word = c(
   # search terms
-  "climate", "change"
+  "sea", "level", "rise",
   # other common but uninformative text?
+  "1", "2026", "2"
 ))
 
 tokens_clean2 <- tokens_clean |> 
   anti_join(custom_sw, by = "word")
 
 # word frequency plot
-
 word_counts <- tokens_clean2 |> 
   count(word, sort = TRUE)
 
 word_counts |> 
   slice_max(n, n = 20) |> 
   ggplot(aes(x = reorder(word, n), y = n)) +
-  geom_col() +
+  geom_col(fill = "hotpink") +
   coord_flip() +
-  labs(title = "Top 20 Words in Blue Sky Climate Change Posts") + 
+  labs(title = "Top 20 Words in Blue Sea Level Rise Posts") + 
   theme_minimal() + 
   labs(x= "", 
        y = "Count")
@@ -203,11 +213,21 @@ afinn <- get_sentiments("afinn")
 
 #score text
 afinn_scores <- posts |> 
+  unnest_tokens(word, text_clean) |> 
+  inner_join(afinn, by = "word") |> 
+  group_by(text)|> 
+  summarise(affin_score = sum(value))
+
 
 #join scores to posts  
 posts <- posts |> 
+  left_join(afinn_scores, by ="text") 
 
+# remove na's from the afin scores column
+posts <- posts |> 
+  mutate(affin_score = replace_na(affin_score, 0))
 ```
+
 
 ### 4c. NRC lexicon (emotion categories)
 
@@ -216,24 +236,88 @@ The NRC lexicon tags words with 8 emotions (anger, fear, anticipation, trust, su
 ```{r nrc}
 nrc <- get_sentiments("nrc")
 
-#plot
+# calculate the nrc scores
 nrc_scores <- posts |> 
+  unnest_tokens(word, text_clean) |> 
+  inner_join(nrc, by = "word") |> 
+  group_by(uri) |> 
+  count(sentiment)
 
 #join scores to post
 posts <- posts |> 
- 
+  left_join(nrc_scores, by = "uri")
+
+# replace na scores with zero
+posts <- posts |> 
+  mutate(nrc_score = replace_na(n, 0)) |> 
+  select(-n)
 ```
 
 Which emotions dominate the corpus? Plot the count of total scored words for each of the 8 emotions.
 
 ```{r nrc-plot}
-nrc_scores %>%
+#visualize bluesky sentiment about sea level rise
+ggplot(nrc_scores) + 
+  geom_col(aes(reorder(sentiment, n), n),
+           fill = "darkblue") +
+  coord_flip() + 
+  theme_minimal() + 
+  labs(title = "BlueSky Sentiment about 'Sea Level' Rise",
+       y = "",
+       x = "Sentiment")
 ```
 
 What words are driving each emotion? Create plots of the top 10 words for each emotion (hint: ggplot and `facet_wrap(~sentiment)`).
+```{r nrc-top-words-function}
+# create a function to plot top 10 words for each emotion
+sentiment_plots <- function(sentiment_value, color_choice) {
+  
+  posts |> 
+  unnest_tokens(word, text_clean) |> 
+  inner_join(nrc, by = "word", relationship = "many-to-many") |> 
+  group_by(sentiment.y) |> 
+  count(word) |> 
+  slice_max(n, n = 10) |>
+  filter(sentiment.y == sentiment_value) |> 
+ggplot() +
+  geom_col(aes(reorder(word, n, decreasing = TRUE), n),
+           fill = color_choice)+
+  # facet_wrap(~sentiment.y) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = paste0("Words that represent ", sentiment_value, " in Bluesky posts"),
+       x = "",
+       y = "Count")
+}
+```
+Run the function for each of the emotions
+```{r}
+anger <- sentiment_plots(sentiment_value = "anger", color_choice = "firebrick")
+anger
+
+trust <- sentiment_plots(sentiment_value = "trust", color_choice = "#D8B4E2")
+trust
+```
+
 
 ```{r nrc-top-words}
-posts %>%
+posts |> 
+  unnest_tokens(word, text_clean) |> 
+  inner_join(nrc, by = "word", relationship = "many-to-many") |> 
+  group_by(sentiment.y) |> 
+  count(word) |> 
+  slice_max(n, n = 10) |>
+  filter(sentiment.y == "anger") |> 
+ggplot() +
+  geom_col(aes(word, n),
+           fill = "firebrick")+
+  # facet_wrap(~sentiment.y) +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Words that Represent Anger",
+       x = "",
+       y = "Count")
+
 ```
 
 ### 4d. sentimentr (sentence-aware)
@@ -259,7 +343,7 @@ Let's run VADER on a single post manually before applying it to the whole datase
 
 ```{r vader-demo}
 # look at a few posts
-posts %>% select(text_clean) %>% slice(1:10)
+posts %>% select(text_clean) |> slice(1:10)
 
 # run VADER on one post — swap in whichever row looks interesting to you
 posts$text_clean[3]
@@ -271,7 +355,7 @@ What did VADER catch? What did it miss? How does the compound score relate to th
 Now score all the posts with VADER.  Rename it's default scoring column to `vader_score`.
 ---
 ```{r vader}
-posts <- posts %>%
+posts <- posts |> 
 ```
 
 ---
@@ -282,7 +366,7 @@ posts <- posts %>%
 Let's see to what extent the 4 numerical methods (bing, afinn, sr, and vader) are in agreement. Select the 4 scores and use `cor()` using "complete.obs".
 
 ```{r correlations}
-posts %>%
+posts |> 
 ```
 
 ### Score distributions
@@ -290,7 +374,7 @@ posts %>%
 Use `pivot_longer()` to reshape the four score columns into a single `score` column with a `method` identifier, then plot with `geom_histogram()` and `facet_wrap()`.
 
 ```{r distributions}
-posts %>%
+posts |> 
 
 ```
 
@@ -303,13 +387,13 @@ posts %>%
 Find posts where the methods disagree most — these are the best candidates for understanding failure modes. Use `mutate()` to create binary flags from the continuous scores, then `filter()` for posts where the two methods point in opposite directions.
 
 ```{r disagreements}
-posts %>%
+posts |> 
 ```
 
 To rank posts by total disagreement, compute the absolute difference between the two scores with `abs()`, then `arrange(desc(...))` to surface the highest-conflict posts.
 
 ```{r high-conflict}
-posts %>%
+posts |> 
 
 ```
 
@@ -323,7 +407,7 @@ posts %>%
 Do more emotionally charged posts get more engagement? Use `abs()` on the VADER compound score to capture emotional intensity regardless of direction, apply `log1p()` to `like_count` to handle the skewed distribution, and add `geom_smooth(method = "lm")` to visualize the trend.
 
 ```{r engagement}
-posts %>%
+posts |> 
 
 ```
 
