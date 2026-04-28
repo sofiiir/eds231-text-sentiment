@@ -6,6 +6,9 @@
 .RData
 .RDataTmp
 
+# ignore data
+/week*/data
+
 # User-specific files
 .Ruserdata
 
@@ -50,3 +53,4 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+.positai
