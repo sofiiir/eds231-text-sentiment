@@ -1,13 +1,12 @@
 ---
-title: "Lab 4: Lexicon-Based Sentiment Analysis with Bluesky Data"
-output: html_document:
-          theme: cosmo
-
+title: "Lab 3: Lexicon-Based Sentiment Analysis with Bluesky Data"
+output: "word_document"
+author: Sofia Rodas
+warning: FALSE
+message: FALSE
+date: April 28, 2026
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = FALSE)
-```
 
 ## Overview
 
@@ -377,7 +376,7 @@ cor_posts
 Use `pivot_longer()` to reshape the four score columns into a single `score` column with a `method` identifier, then plot with `geom_histogram()` and `facet_wrap()`.
 
 ```{r distributions}
-posts |> 
+cal_posts |> 
   pivot_longer(cols = everything(), 
                names_to = "method",
                values_to = "score") |> 
@@ -409,7 +408,11 @@ Find posts where the methods disagree most — these are the best candidates for
 
 Affin lexicon and BING lexicon have the most values that are not zero so check for missclassifications in these lexicons.
 ```{r disagreements}
-diff_bing_affin <- posts |> 
+# filter posts for the necessary columns
+posts_trial <- posts |> 
+  select(text_clean, bing_score, affin_score)
+
+diff_bing_affin <- posts_trial |> 
   mutate(bing_categ = ifelse(bing_score > 0, "positive", "negative"),
 affin_categ = ifelse(affin_score > 0, "positive", "negative")) |> 
   filter(bing_categ != affin_categ)
@@ -418,14 +421,56 @@ affin_categ = ifelse(affin_score > 0, "positive", "negative")) |>
 To rank posts by total disagreement, compute the absolute difference between the two scores with `abs()`, then `arrange(desc(...))` to surface the highest-conflict posts.
 
 ```{r high-conflict}
-posts |> 
-  abs()
-
+# calculate absolute difference in bing and affin scores
+diff_reorder<- diff_bing_affin |> 
+  mutate(diff_bing_affin = abs(bing_score - affin_score)) |> 
+  arrange(desc(diff_bing_affin))
 ```
 
 **Question 2:** Read through 5 of the high-conflict posts. For each one, write a sentence explaining which method you think is closer to correct and why.
 
+```{r}
+diff_reorder$text_clean[1]
+paste0("The BING score is ", diff_reorder$bing_score[1])
+paste0("The AFINN score is ", diff_reorder$affin_score[1])
+```
+The overall sentiment of this post is negative. It is speaking about how Asian countries are fiscally impacted by sea level rise. The BING score is more accurate.
+
+```{r}
+diff_reorder$text_clean[16]
+paste0("The BING score is ", diff_reorder$bing_score[16])
+paste0("The AFINN score is ", diff_reorder$affin_score[16])
+```
+This post is discussing the oil prices increasing following the war in the Middle East. This post is undoubtedly extremely negative. The Afin score is more accurate.
+
+```{r}
+diff_reorder$text_clean[21]
+paste0("The BING score is ", diff_reorder$bing_score[21])
+paste0("The AFINN score is ", diff_reorder$affin_score[21])
+```
+This post discusses a commission that fights for health and justice. It is overall positive. The Afin score is more accurate.
+
+```{r}
+diff_reorder$text_clean[25]
+paste0("The BING score is ", diff_reorder$bing_score[25])
+paste0("The AFINN score is ", diff_reorder$affin_score[25])
+```
+This post is boasting about the success of Santa Monica sand dunes as a protection against sea level rise. This is a positive post. The Afin score is more accurate.
+
+```{r}
+diff_reorder$text_clean[37]
+paste0("The BING score is ", diff_reorder$bing_score[37])
+paste0("The AFINN score is ", diff_reorder$affin_score[37])
+```
+This post is positive as it describes a community and research based approach to creating a plan. The Afin score is more accurate.
+
+
 **Question 3:** Based on everything you've run, which method would you choose if you were delivering a report onpublic sentiment around your topic, and why? What additional steps would you take to validate your choice?
+
+I would choose the AFINN lexicon method to run a report on public sentiment. I would not choose the sentimentr or VADER scoring methods because they compute sentiment analysis on this topic as mostly neutral. After investigating further the differences between AFINN and BING lexicon methods AFIN was more accurate a majority of the time. 
+
+To validate my choices further I would take a random sample and assess whether I agree with its assessment to analyze the possible percentage that I disagree with. This metric can at least be added as a clarifying value that can show the limitations of the methodology. 
+
 ---
 
 
