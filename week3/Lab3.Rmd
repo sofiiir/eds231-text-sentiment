@@ -57,6 +57,7 @@ library(tidyverse)
 library(tidytext)
 library(sentimentr)
 library(remotes)
+library(patchwork)
 ```
 
 ---
@@ -83,7 +84,7 @@ Now search for posts on an environmental keyword. We'll use `"climate change"` a
 # # query bluesky for sea level rise posts
 # raw_posts <- search_post("sea level rise", limit = 1000)
 
-raw_posts <- read_csv("bluesky-sealevelrise.csv")
+raw_posts <- read_csv("data/bluesky-sealevelrise.csv")
 
 ```
 Save the sea level rise file so we don't need to query every time we run this file. 
@@ -285,53 +286,41 @@ ggplot() +
   # facet_wrap(~sentiment.y) +
   coord_flip() +
   theme_minimal() +
-  labs(title = paste0("Words that represent ", sentiment_value, " in Bluesky posts"),
+  labs(title = paste0("Words that represent ", sentiment_value),
        x = "",
        y = "Count")
 }
 ```
 Run the function for each of the emotions
-```{r}
-anger <- sentiment_plots(sentiment_value = "anger", color_choice = "firebrick")
-anger
-
-trust <- sentiment_plots(sentiment_value = "trust", color_choice = "#D8B4E2")
-trust
-```
-
-
 ```{r nrc-top-words}
-posts |> 
-  unnest_tokens(word, text_clean) |> 
-  inner_join(nrc, by = "word", relationship = "many-to-many") |> 
-  group_by(sentiment.y) |> 
-  count(word) |> 
-  slice_max(n, n = 10) |>
-  filter(sentiment.y == "anger") |> 
-ggplot() +
-  geom_col(aes(word, n),
-           fill = "firebrick")+
-  # facet_wrap(~sentiment.y) +
-  coord_flip() +
-  theme_minimal() +
-  labs(title = "Words that Represent Anger",
-       x = "",
-       y = "Count")
 
+anger <- sentiment_plots(sentiment_value = "anger", color_choice = "firebrick")
+trust <- sentiment_plots(sentiment_value = "trust", color_choice = "#D8B4E2")
+disgust <- sentiment_plots(sentiment_value = "disgust", color_choice = "#E6F9AF")
+joy <- sentiment_plots(sentiment_value = "joy", color_choice = "#384E77")
+fear <- sentiment_plots(sentiment_value = "fear", color_choice = "#685044")
+anticipation <- sentiment_plots(sentiment_value = "anticipation", color_choice = "#6DD6DA")
+sadness <- sentiment_plots(sentiment_value = "sadness", color_choice = "#2176FF")
+surprise <- sentiment_plots(sentiment_value = "surprise", color_choice = "#BB4D00")
+positive <- sentiment_plots(sentiment_value = "positive", color_choice = "#F2A359")
+negative <- sentiment_plots(sentiment_value = "negative", color_choice = "black")
+
+anger + trust + disgust + joy + fear + anticipation + sadness + surprise + positive + negative
 ```
+
 
 ### 4d. sentimentr (sentence-aware)
 
 Unlike the word-level lexicons above, `{sentimentr}` scores at the sentence level and handles valence shifters like negation — "not alarming" won't score the same as "alarming." Pass the full `text_clean` vector to `sentiment_by()`. Rename the resulting `ave_sentiment` to `sr_scores` and join back onto `posts` by row index. I'll give you this code as we haven't fully covered this yet.
 
 ```{r sentimentr}
-sr_scores <- sentiment_by(posts$text_clean) %>%
-  select(element_id, ave_sentiment) %>%
-  rename(sr_score = ave_sentiment) %>%
+sr_scores <- sentiment_by(posts$text_clean) |> 
+  select(element_id, ave_sentiment) |> 
+  rename(sr_score = ave_sentiment) |> 
   mutate(element_id = as.integer(element_id))
 
-posts <- posts %>%
-  mutate(element_id = row_number()) %>%
+posts <- posts |> 
+  mutate(element_id = row_number()) |> 
   left_join(sr_scores, by = "element_id")
 ```
 
@@ -343,7 +332,7 @@ Let's run VADER on a single post manually before applying it to the whole datase
 
 ```{r vader-demo}
 # look at a few posts
-posts %>% select(text_clean) |> slice(1:10)
+posts |>  select(text_clean) |> slice(1:10)
 
 # run VADER on one post — swap in whichever row looks interesting to you
 posts$text_clean[3]
@@ -351,11 +340,14 @@ tidyvader::vader_chr(posts$text_clean[3])
 ```
 
 What did VADER catch? What did it miss? How does the compound score relate to the word-level scores?
+The selected sentence is positive and neutral which is captured in the VADER score. Scientific writing is inherently neutral and positive which is evident in the VADER score. The compound score encapsulates the small amount of positve and the mostly neutral tone of the sentence. 
 
 Now score all the posts with VADER.  Rename it's default scoring column to `vader_score`.
 ---
 ```{r vader}
 posts <- posts |> 
+  mutate(vader_score = purrr::map(text_clean, ~ tidyvader::vader_chr(.x)$compound))
+  
 ```
 
 ---
@@ -366,7 +358,18 @@ posts <- posts |>
 Let's see to what extent the 4 numerical methods (bing, afinn, sr, and vader) are in agreement. Select the 4 scores and use `cor()` using "complete.obs".
 
 ```{r correlations}
-posts |> 
+# select only necessary rows
+cal_posts <- posts |> 
+  select(bing_score, affin_score, sr_score, vader_score)
+
+# make the vader score numeric
+cal_posts <- cal_posts |> 
+  mutate(vader_score = as.numeric(vader_score))
+
+# calculate the correlation scores 
+cor_posts <- cal_posts |> 
+    cor(use = "complete.obs")
+cor_posts
 ```
 
 ### Score distributions
@@ -375,44 +378,54 @@ Use `pivot_longer()` to reshape the four score columns into a single `score` col
 
 ```{r distributions}
 posts |> 
+  pivot_longer(cols = everything(), 
+               names_to = "method",
+               values_to = "score") |> 
+  ggplot() +
+  geom_histogram(aes(x = score, fill = method), 
+                 show.legend = FALSE) + 
+  facet_wrap(~method,
+             labeller = as_labeller(c("affin_score" = "AFINN lexicon",
+                                      "bing_score"= "Bing lexicon",
+                                      "sr_score"="sentimentr",
+                                      "vader_score"  = "VADER")),
+             ) + 
+  scale_fill_viridis_d()+
+  theme_minimal() + 
+  labs(title = "Comparing Sentiment Analysis Scores By Methods")
 
 ```
 
 **Question 1:** Do the four methods broadly agree or disagree? Where do you see the biggest differences in the distributions? Which method produces the most zeros, and why?
 
+`sentimentr` and `VADER` agree the most. `Bing lexicon` deviates from `sentimentr` and `VADER` but `AFINN lexicon` deviates the most from the `sentimentr` and `VADER`. 
+
+`sentimentr` has the most zeros. Based on the text explaining `sentimentr` above, `sentimentr` scores at the sentence level and handles valence shifters like negation — "not alarming" won't score the same as "alarming". It makes sense that `sentimentr` has the most zeros because it doesn't erroneously say that words are negative even when they're just shifters. 
 ---
 
 ## Part 6: Spot-Check for Misclassification
 
 Find posts where the methods disagree most — these are the best candidates for understanding failure modes. Use `mutate()` to create binary flags from the continuous scores, then `filter()` for posts where the two methods point in opposite directions.
 
+Affin lexicon and BING lexicon have the most values that are not zero so check for missclassifications in these lexicons.
 ```{r disagreements}
-posts |> 
+diff_bing_affin <- posts |> 
+  mutate(bing_categ = ifelse(bing_score > 0, "positive", "negative"),
+affin_categ = ifelse(affin_score > 0, "positive", "negative")) |> 
+  filter(bing_categ != affin_categ)
 ```
 
 To rank posts by total disagreement, compute the absolute difference between the two scores with `abs()`, then `arrange(desc(...))` to surface the highest-conflict posts.
 
 ```{r high-conflict}
 posts |> 
+  abs()
 
 ```
 
 **Question 2:** Read through 5 of the high-conflict posts. For each one, write a sentence explaining which method you think is closer to correct and why.
 
 **Question 3:** Based on everything you've run, which method would you choose if you were delivering a report onpublic sentiment around your topic, and why? What additional steps would you take to validate your choice?
----
-
-## Bonus: Engagement vs. Sentiment (completion optional)
-
-Do more emotionally charged posts get more engagement? Use `abs()` on the VADER compound score to capture emotional intensity regardless of direction, apply `log1p()` to `like_count` to handle the skewed distribution, and add `geom_smooth(method = "lm")` to visualize the trend.
-
-```{r engagement}
-posts |> 
-
-```
-
-**Bonus:** Is there a relationship between sentiment intensity and engagement? What does that suggest about what gets amplified on Bluesky?
-
 ---
 
 
