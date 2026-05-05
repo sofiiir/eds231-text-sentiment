@@ -1,0 +1,161 @@
+---
+title: "Coral Bleaching Articles - Central America"
+format: html
+author: Sofia Rodas
+---
+
+```{r}
+library(LexisNexisTools)
+library(tidyverse)
+library(quanteda)
+library(tm)
+library(topicmodels)
+library(topicdoc)   
+library(tidyverse)
+library(tidytext)
+library(reshape2)
+library(tictoc)
+library(LDAvis)
+library(tsne)
+library(servr)
+```
+
+```{r}
+
+pre_files <- list.files(
+  path = here::here("coral_bleaching_cen_amer", "data"),   # update to your folder
+  pattern = "\\.docx$",
+  full.names = TRUE,
+  recursive = TRUE,
+  ignore.case = TRUE
+)
+
+pre_dat <- lnt_read(pre_files)
+
+pre_meta_df       <- pre_dat@meta
+pre_articles_df   <- pre_dat@articles
+pre_paragraphs_df <- pre_dat@paragraphs
+
+df <- tibble(
+  date     = pre_meta_df$Date,
+  headline = pre_meta_df$Headline,
+  id       = pre_meta_df$ID,
+  text     = pre_articles_df$Article,
+  source   = pre_meta_df$Newspaper
+)
+```
+
+**1. Build and clean your corpus**
+Create a corpus from your articles. Clean appropriately for your data —
+consider what stopwords, minimum document frequencies, and tokenization
+choices make sense given your specific corpus.
+
+## Build the Corpus
+
+We use `corpus()` from {quanteda} to build the corpus from our data
+frame.
+
+```{r corpus}
+corpus <- corpus(x=df, textg_field = "text")
+```
+
+## Tokenize and Clean
+
+`tokens()` handles punctuation and number removal. We also build a
+custom stopword list that removes common journalistic filler words that
+carry no thematic signal. We can return to this section to add
+additional words once we see the results.
+
+```{r tokens}
+add_stops <- c(quanteda::stopwords("en", source = "smart"),
+               "said", "says", "told", "according")
+
+toks <- tokens(corpus, remove_punct = TRUE) |> 
+  tokens_tolower()
+
+toks1 <- tokens_select(toks, pattern = add_stops, selection = "remove")
+```
+
+## Build the Document-Feature Matrix
+
+Topic modeling requires a document-feature matrix (DFM). We trim rare
+terms (appearing in fewer than 2 documents) and remove empty rows — LDA
+cannot process documents with no terms.
+
+```{r dfm}
+dfm1 <- dfm(toks1)
+dfm2 <- dfm_trim(dfm1, min_docfreq = 2)
+
+# Remove empty rows — LDA will error on these
+sel_idx <- slam::row_sums(dfm2) > 0
+
+dfm <- dfm2[sel_idx,]
+
+```
+
+------------------------------------------------------------------------
+
+**2. Select k using multiple criteria**
+
+Run three models (i.e. with 3 values of k) and select the overall best
+value for k (the number of topics) - include some justification for your
+selection: FindTopicsNumber() optimization metrics, theory,
+interpretability, LDAvis. Select the best single value of k. Criteria to
+consider:
+
+\- **Optimization Metrics** - Run models across a range of k values and
+produce a coherence plot using `topicdoc`.
+
+\- **Theory**: what themes do you expect given your article topic?
+
+\- **Interpretability**: read the top 10 terms at candidate k values —
+do they form coherent, distinct themes?
+
+\- **LDAvis**: do the topic circles separate well, or do they overlap
+heavily?
+
+Select a single best k and write 2–3 sentences justifying your choice
+drawing on the three criteria.
+
+## Step 1: Initial Model (Theory-Driven k)
+
+Great, now we are almost ready to run a model. We just have to come up
+with an initial value for k, the number of latent topics present in the
+data. How do we do this? Let's say I think there may be political,
+economic and environmental articles. So I will tell the model to look
+for 3 topics by setting the k parameter = 3.
+
+```{r LDA_k3}
+k <- 3
+
+topicModel_k3 <- LDA(dfm,
+                     k,
+                     method = "Gibbs",
+                     control = list(iter = 100,
+                                    verbose = 25,
+                                    seed = 321))
+```
+
+
+### Inspect the Posterior Distributions
+
+`posterior()` extracts the two key output matrices:
+
+-   **theta (θ)**: document × topic matrix — *P(topic \| document)*
+-   **beta/phi (φ)**: topic × term matrix — *P(term \| topic)*
+
+```{r inspect_k3}
+result <- posterior(topicModel_k3)
+
+beta  <- result$terms
+theta <- result$topics
+
+cat("phi dimensions  (topics × vocab):", dim(beta), "\n")
+cat("theta dimensions (docs × topics):", dim(theta), "\n")
+
+# Top 10 terms per topic
+terms(topicModel_k3, 10)
+
+```
+
+
