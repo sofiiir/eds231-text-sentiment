@@ -8,6 +8,7 @@
 
 # ignore data
 /week*/data
+/coral_bleaching_cen_amer/data
 
 # User-specific files
 .Ruserdata
