@@ -208,7 +208,7 @@ chosen_acc <- tune_rs %>%
 Next, let's finalize our workflow with this particular regularization penalty. This is the regularization penalty that our tuning results indicate give us the best model.
 
 ```{r final-model}
-final_lasso <- 
+final_lasso <- finalize_workflow(wf)
 
 final_lasso
 
