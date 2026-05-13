@@ -9,6 +9,7 @@
 # ignore data
 /week*/data
 /coral_bleaching_cen_amer/data
+/oyster-aquaculture/data
 
 # User-specific files
 .Ruserdata
