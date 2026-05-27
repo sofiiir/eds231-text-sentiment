@@ -1,0 +1,515 @@
+---
+title: "Word Embeddings - Lab 6 "
+author: "Sofia Rodas"
+date: May 26, 2026
+output: html_document
+message: FALSE
+warning: FALSE
+---
+
+```{r packages, include = FALSE}
+library(tidytext)
+library(tidyverse)
+library(RSpectra)
+library(broom)
+library(textdata)
+library(ggplot2)
+library(dplyr)
+library(LexisNexisTools)
+library(quanteda)
+library(tm)
+library(topicmodels)
+library(topicdoc)   
+library(reshape2)
+library(tictoc)
+library(LDAvis)
+library(tsne)
+library(servr)
+```
+
+In this lab we build word embeddings from scratch, then explore a set of pretrained GloVe embeddings trained on a much larger general-purpose text corpus. The goal is to understand how distributional context gets encoded as geometry — and what it means to do math on meaning.
+
+We'll move through the core steps: computing co-occurrence statistics, weighting them with PMI, and reducing dimensionality with SVD to produce word vectors. Then we'll use those vectors to find semantically similar words and explore word arithmetic. We'll start off today by loading the climbing incident data again.
+
+```{r data,}
+incidents_df<-read_csv("https://raw.githubusercontent.com/MaRo406/EDS-231-text-sentiment/main/data/climbing_reports_model_dat.csv")
+```
+
+First, let's calculate the unigram probabilities -- how often we see each word in this corpus.
+
+```{r unigrams}
+unigram_probs <- incidents_df %>% 
+  unnest_tokens(word, Text) %>% 
+  anti_join(stop_words, by = 'word') %>% 
+  count(word, sort=TRUE) %>% 
+  mutate(p = n/sum(n))
+  
+unigram_probs 
+```
+
+Now we have the probability of each word.
+
+Next, we need to know how often we find each word near each other word -- the skipgram probabilities. In this case we'll define the word context as a five-word window. We'll slide that window across all of our text and record which words occurr together within that window.
+
+Now let's write some code that adds an ngramID column that contains constituent information about each 5-gram we constructed by sliding our window.
+
+```{r make-skipgrams}
+skipgrams <- incidents_df %>% 
+  unnest_tokens(ngram, Text, token = "ngrams", n = 5) %>% 
+  mutate(ngramID = row_number()) %>% 
+  unite(skipgramID, ID, ngramID) %>% 
+  unnest_tokens(word, ngram) %>% 
+  anti_join(stop_words, by = 'word')
+
+skipgrams
+```
+
+Now we sum the total # of occurences of each pair of words.
+
+```{r pairwise_count}
+skipgram_probs <- skipgrams %>% 
+  group_by(skipgramID) %>% 
+  left_join(skipgrams, by = "skipgramID", relationship = "many-to-many") %>% 
+  ungroup() %>% 
+  rename(word1 = word.x, word2 = word.y) %>% 
+  count(word1, word2, sort = TRUE) %>% 
+  mutate(p = n/sum(n))
+```
+
+The next step is to normalize these probabilities, that is, to calculate how often words occur together within a window, relative to their total occurrences in the data.
+
+```{r norm-prob}
+normalized_prob <- skipgram_probs %>% 
+  filter(n > 20) %>% 
+  left_join(unigram_probs %>% 
+              select(word1 = word, p1 = p),
+            by = "word1") %>% 
+  left_join(unigram_probs %>% 
+              select(word2 = word, p2 = p),
+            by = "word2") %>% 
+            mutate(p_together = p/p1/p2)
+
+normalized_prob[5000:5010,]
+
+#Which words are most associated with "rope"?   
+normalized_prob %>% 
+  filter(word2=="rope") %>% 
+  arrange(-p_together)
+
+```
+
+Now we have all the pieces to calculate the point-wise mutual information (PMI) measure. It's the logarithm of the normalized probability of finding two words together. PMI tells us which words occur together more often than expected based on how often they occurred on their own.
+
+Then we convert to a matrix so we can use matrix factorization and reduce the dimensionality of the data.
+
+```{r pmi}
+pmi_matrix<- normalized_prob %>%
+    mutate(pmi = log10(p_together)) %>%
+    cast_sparse(word1, word2, pmi)  ##tidytext::cast_sparse() to cast from tidy to a sparse matrix form from {Matrix}
+```
+
+Now we do the singular value decomposition with RSpectra::svds(). It's a "partial decomposition" as we are specifying a limited number of dimensions, in this case 100.
+
+```{r pmi-matrix}
+# remove missing data R Matrix package
+pmi_matrix@x[is.na(pmi_matrix@x)] <- 0
+
+pmi_svd <- svds(pmi_matrix, k = 100) #Reducing to 100 dimensions
+
+# next we output the word vectors of left singular values.  
+word_vectors <- pmi_svd$u
+rownames(word_vectors) <- rownames(pmi_matrix)
+```
+
+These vectors in the "u" matrix are contain "left singular values". They are orthogonal vectors that create a 100-dimensional (k=100) semantic space where we can locate each word. The distance between words in this space gives an estimate of their semantic similarity.
+
+Here's a function for matching the most similar vectors to a given vector.
+
+```{r search-synonyms}
+search_synonyms <- function(word_vectors, selected_vector, original_word = NULL) {
+  similarities <- word_vectors %*% selected_vector / 
+    (sqrt(rowSums(word_vectors^2)) * sqrt(sum(selected_vector^2)))
+  
+  result <- tibble(
+    token      = rownames(word_vectors),
+    similarity = as.numeric(similarities)
+  ) %>%
+    arrange(desc(similarity))
+  
+  if (!is.null(original_word)) result <- filter(result, token != original_word)
+  result
+}
+```
+Let's test it out!
+
+```{r find-synonyms}
+fall <- search_synonyms(word_vectors, word_vectors["fall",])
+fall
+slip <- search_synonyms(word_vectors, word_vectors["slip",])
+```
+
+Here's a plot for visualizing the most similar words to a given target word.
+
+```{r plot-synonyms}
+slip %>%
+    mutate(selected = "slip") %>%
+    bind_rows(fall %>%
+                  mutate(selected = "fall")) %>%
+    group_by(selected) %>%
+    top_n(15, similarity) %>%
+    ungroup %>%
+    mutate(token = reorder_within(token, similarity, selected)) %>%
+    ggplot(aes(token, similarity, fill = selected)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~selected, scales = "free") +
+    scale_x_reordered() +
+    coord_flip() +
+    theme(strip.text=element_text(hjust=0, size=12)) +
+    scale_y_continuous(expand = c(0,0)) +
+    labs(x = NULL, title = "What word vectors are most similar to slip or fall?") + 
+    theme_minimal()
+  
+```
+
+One cool thing about representing words as numerical vectors is that we can use math on those numbers that has some semantic meaning.
+
+```{r word-math}
+snow_danger <- word_vectors["snow",] + word_vectors["danger",]
+search_synonyms(word_vectors, snow_danger)
+
+no_snow_danger <- word_vectors["danger",] - word_vectors["snow",]
+search_synonyms(word_vectors, no_snow_danger)
+
+```
+
+So far we've built embeddings from scratch using a small, specialized corpus — climbing incident reports. Those embeddings capture meaning as it exists in that specific context. Now let's compare them to a set of pretrained embeddings trained on a much larger and more general corpus.
+We'll be using GloVe (Global Vectors for Word Representation), a popular embedding method that builds co-occurrence statistics across a massive text corpus. The embeddings we're loading were trained on the Dolma dataset — a large open-source collection of web text, books, and other sources — giving us 300-dimensional vectors for over 1.2 million words.
+Loading and cleaning the file takes a few steps. Each row is a word followed by 300 numbers, so we read it as a space-separated table, deduplicate any repeated tokens, and convert it into a matrix with words as row names — the same structure as our climbing embeddings.
+
+```{r get-Glove}
+# glove_raw <- read.table(
+#   #"/courses/EDS231/Models/GloVe-embeddings/dolma_300_2024_1.2M.100_combined.txt",
+#   quote    = "",        # empty string is correct here
+#   sep      = " ",
+#   header   = FALSE,
+#   fill     = FALSE,     # don't pad — forces strict column count
+#   comment.char = ""     # ignore any comment # characters in tokens 
+# )
+
+glove_raw <- read.table(here::here("week8/data/wiki_giga_2024_100_MFT20_vectors_seed_2024_alpha_0.75_eta_0.05.050_combined.txt"), 
+                        quote = NULL,
+                        sep = " ", 
+                        header = FALSE, 
+                        fill = TRUE)
+```
+
+
+```{r examine-GloVe}
+gloVe <- tibble(glove_raw)
+unique_glove <- distinct(gloVe)
+
+# Should be a word, not a number
+head(glove_raw$V1)
+
+# Should be 301 (1 token + 300 dims) on workbench data
+ncol(glove_raw)
+```
+
+```{r GloVe-matrix}
+# Deduplicate and build matrix
+glove_vecs <- gloVe[!duplicated(glove_raw$V1), ] %>%
+  column_to_rownames(var = "V1") %>%
+  as.matrix()
+```
+
+OK, that should do it.  Let's try some word math to test out these embeddings.
+
+```{r GloVe-math}
+# a classic word math equation...how does it work?
+classic_king <- glove_vecs["king",] - glove_vecs["man",] 
+
+# try another one
+king <- glove_vecs["queen",] + glove_vecs["man",] 
+
+#another classic
+glove_city <- glove_vecs["berlin",] - glove_vecs["germany",] + glove_vecs["france",]
+search_synonyms(glove_vecs, glove_city)
+
+```
+
+### Assignment
+
+#### Train Your Own Embeddings
+
+1.  Using the data from your Nexis Uni query from the topic modeling lab, create a set of word embeddings. To do this, you'll essentially need to recreate the steps in today's example down through the chunk named "pmi".
+
+## Oyster aquaculture analysis
+
+```{r}
+# extract data from the files
+pre_files <- list.files(
+  path = here::here("oyster-aquaculture", "data"),   
+  pattern = "\\.docx$",
+  full.names = TRUE,
+  recursive = TRUE,
+  ignore.case = TRUE
+)
+
+pre_dat <- lnt_read(pre_files)
+
+pre_meta_df       <- pre_dat@meta
+pre_articles_df   <- pre_dat@articles
+pre_paragraphs_df <- pre_dat@paragraphs
+
+df <- tibble(
+  date     = pre_meta_df$Date,
+  headline = pre_meta_df$Headline,
+  id       = pre_meta_df$ID,
+  text     = pre_articles_df$Article,
+  source   = pre_meta_df$Newspaper
+)
+```
+## Calculate the probability of the words
+
+```{r oyst_unigrams}
+oyst_unigram_probs <- df |> 
+  unnest_tokens(word, text) |> 
+  anti_join(stop_words, by = 'word') |>  
+  count(word, sort=TRUE) |>  
+  mutate(p = n/sum(n))
+  
+oyst_unigram_probs 
+```
+
+### Using a sliding window to make a skipgram
+
+Analyze which words occur together by creating a skipgram. 
+
+```{r oyst-skipgrams}
+# create ngramis and skipgramid 
+oyst_skipgrams <- df |> 
+  unnest_tokens(ngram, text, token = "ngrams", n = 5) |> 
+  mutate(ngramID = row_number()) |> 
+  unite(skipgramID, id, ngramID) |> 
+  unnest_tokens(word, ngram) |>  
+  anti_join(stop_words, by = 'word')
+
+oyst_skipgrams
+```
+
+### Sum the total number of occurences of each pair of words
+
+```{r oyst_pairwise_count}
+oyst_skipgram_probs <- oyst_skipgrams |>  
+  group_by(skipgramID) |>  
+  left_join(oyst_skipgrams, by = "skipgramID", relationship = "many-to-many") |> 
+  ungroup() |>  
+  rename(word1 = word.x, word2 = word.y) |> 
+  count(word1, word2, sort = TRUE) |>  
+  mutate(p = n/sum(n))
+```
+
+
+### Normalize these probabilities
+
+Calculate how often words occur together within a window, relative to their total occurrences in the data.
+
+```{r oyst_norm-prob}
+oystnormalized_prob <- oyst_skipgram_probs |> 
+  filter(n > 20) |>  
+  left_join(oyst_unigram_probs |> 
+              select(word1 = word, p1 = p),
+            by = "word1") |>  
+  left_join(oyst_unigram_probs |>  
+              select(word2 = word, p2 = p),
+            by = "word2") |>  
+            mutate(p_together = p/p1/p2)
+
+normalized_prob[5000:5010,]
+
+#Which words are most associated with "restoration"?   
+oystnormalized_prob |>  
+  filter(word2=="restoration") |>  
+  arrange(-p_together)
+
+```
+
+### Point-wise mutual information (PMI) measure 
+The PMI is the logarithm of the normalized probability of finding two words together. PMI assesses which words occur together more often than expected based on how often they occurred on their own.
+
+Then we convert to a matrix so we can use matrix factorization and reduce the dimensionality of the data.
+
+```{r oyst-pmi}
+pmi_matrix <- oystnormalized_prob  |> 
+    mutate(pmi = log10(p_together))  |> 
+    cast_sparse(word1, word2, pmi)  ##tidytext::cast_sparse() to cast from tidy to a sparse matrix form from {Matrix}
+```
+
+Now we do the singular value decomposition with RSpectra::svds(). It's a "partial decomposition" as we are specifying a limited number of dimensions, in this case 100.
+
+```{r oyst-pmi-matrix}
+#remove missing data R Matrix package
+pmi_matrix@x[is.na(pmi_matrix@x)] <- 0
+
+pmi_svd <- svds(pmi_matrix, k = 100) #Reducing to 100 dimensions
+
+#next we output the word vectors of left singular values.  
+word_vectors <- pmi_svd$u
+rownames(word_vectors) <- rownames(pmi_matrix)
+```
+
+2.  Think of 3-5 key words in your data set. Calculate and plot the 10 most semantically similar words for each of them. Identify and interpret any interesting or surprising results.
+
+Use the function for matching the most similar vectors to a given vector.
+
+```{r oyst-search-synonyms}
+search_synonyms <- function(word_vectors, selected_vector, original_word = NULL) {
+  similarities <- word_vectors %*% selected_vector / 
+    (sqrt(rowSums(word_vectors^2)) * sqrt(sum(selected_vector^2)))
+  
+  result <- tibble(
+    token      = rownames(word_vectors),
+    similarity = as.numeric(similarities)
+  ) %>%
+    arrange(desc(similarity))
+  
+  if (!is.null(original_word)) result <- filter(result, token != original_word)
+  result
+}
+```
+
+
+Find the most similar words in word vectors, which is constructed from the text being analyzed. 
+
+```{r oyst-word-vec-find-synonyms}
+restoration_word_vec <- search_synonyms(word_vectors, word_vectors["restoration",])
+fisheries_word_vec <- search_synonyms(word_vectors, word_vectors["fisheries",])
+genome_word_vec <- search_synonyms(word_vectors, word_vectors["genome",])
+oyster_word_vec <- search_synonyms(word_vectors, word_vectors["oyster",])
+
+```
+
+### Visualize the most given words to a target word
+
+```{r oyst-word-vec-plot-synonyms}
+restoration_word_vec %>% 
+    mutate(selected = "restoration") %>% 
+    bind_rows(fisheries_word_vec %>%
+                  mutate(selected = "fisheries")) %>% 
+    bind_rows(genome_word_vec %>%
+                  mutate(selected = "genome")) %>% 
+    bind_rows(oyster_word_vec %>%
+                  mutate(selected = "oyster")) %>% 
+    group_by(selected) %>% 
+    top_n(15, similarity) %>% 
+    ungroup %>% 
+    mutate(token = reorder_within(token, similarity, selected)) %>%
+    ggplot(aes(token, similarity, fill = selected)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~selected, scales = "free") +
+    scale_x_reordered() +
+    coord_flip() +
+    theme(strip.text=element_text(hjust=0, size=12)) +
+    scale_y_continuous(expand = c(0,0)) +
+    labs(x = NULL, title = "What word vectors are most similar to fisheries, genome, oyster, and restoration?") + 
+    theme_minimal()
+  
+```
+Surprising results: Most of the interesting results are the words that are most similar to oyster. The word death is on the list for most similar to oyster. This means that oyster deaths are spoken about frequently. My question would be are the deaths of oysters simply being talked about more than other topics or are there an unprecedented number of deaths in oysters. 
+
+It's also interesting that the word "canada's" is similar to the word oyster. This is not a region that I know to have a large amount of oyster aquaculture. 
+
+Lastly, I find it interesting that restoration in these articles is similar to coral. These restoration themed texts likely talk about all restoration and not just oyster restoration. Alternatively, the oyster restoration is being compared to coral restoration. 
+
+3.  Assemble 3 word math equations that you think could be useful or interesting for exploring the meaning of key words or ideas in your data set.
+
+
+```{r oyst_word-math}
+fisheries_rec <- word_vectors["fisheries",] + word_vectors["recreational",]
+search_synonyms(word_vectors, fisheries_rec)
+
+no_death_oyster <- word_vectors["oyster",] - word_vectors["deaths",]
+search_synonyms(word_vectors, no_death_oyster)
+
+no_coral_restoration <- word_vectors["restoration",] - word_vectors["coral",]
+search_synonyms(word_vectors, no_coral_restoration)
+
+```
+
+
+4.  Recreate the analyses in the last three chunks (find-synonyms, plot-synonyms, word-math) with the GloVe embeddings. How are they different from the embeddings created from the climbing accident data? Why do you think they are different?
+
+*This question feels unclear to me. I'm not really sure whats being asked of me.* 
+
+I'm analyzing the difference between word vector synonyms and and the glove vector synonyms.The differences between `word_vectors` and `glove_vecs` synonym outputs is that the word vectors is created based on the text I downloaded from Nexis Uni and the glove vector data is coming from the larger web data.
+
+```{r}
+# use the search synonym function with the glove vec 
+restoration_glove <- search_synonyms(glove_vecs, glove_vecs["restoration",])
+fisheries_glove <- search_synonyms(glove_vecs, glove_vecs["fisheries",])
+genome_glove <- search_synonyms(glove_vecs, glove_vecs["genome",])
+oyster_glove <- search_synonyms(glove_vecs, glove_vecs["oyster",])
+```
+
+
+```{r}
+restoration_glove %>% 
+    mutate(selected = "restoration") %>% 
+    bind_rows(fisheries_glove %>%
+                  mutate(selected = "fisheries")) %>% 
+    bind_rows(genome_glove %>%
+                  mutate(selected = "genome")) %>% 
+    bind_rows(oyster_glove %>%
+                  mutate(selected = "oyster")) %>% 
+    group_by(selected) %>% 
+    top_n(15, similarity) %>% 
+    ungroup %>% 
+    mutate(token = reorder_within(token, similarity, selected)) %>%
+    ggplot(aes(token, similarity, fill = selected)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~selected, scales = "free") +
+    scale_x_reordered() +
+    coord_flip() +
+    theme(strip.text=element_text(hjust=0, size=12)) +
+    scale_y_continuous(expand = c(0,0)) +
+    labs(x = NULL, title = "What word vectors are most similar to fisheries, genome, oyster, and restoration?") + 
+    theme_minimal()
+```
+
+Analysis: Overall, I prefer using the word vector data created from the text in analyzing the synonyms of words because it provides more specific context as opposed to the general context of the glove vector data. This makes it more specific.
+
+#### Explore Pretrained Embeddings
+
+5.  Recreate parts 2 and 3 above using the the GloVe embeddings in place of the ones you trained. How do they compare? What are the implications for applications of these embeddings?
+
+Analysis: Overall, I prefer using the word vector data created from the text in analyzing the synonyms of words because it provides more specific context as opposed to the general context of the glove vector data when looking at the synonym words. This makes it the associations more specific.
+
+```{r}
+# compare restoration results
+head(restoration_glove)
+head(restoration_word_vec)
+
+
+```
+Restoration has a broad meaning of restoring something but in the context of oyster aquaculture it makes more sense have scientific and buisness words relate to the word restoration. The words monitoring and investments are more informative than renovation and reconstruction to compare a few words. 
+
+```{r}
+head(fisheries_glove)
+head(fisheries_word_vec)
+```
+
+The term fisheries general meaning is relevant to the conversation around oyster aquaculture but it again, the word vector created from the text used in this analysis gives more context about the specific section of the fisheries industry discussed in this conversation.
+
+```{r}
+head(genome_glove)
+head(genome_word_vec)
+```
+I am not particularly familiar with genome terminology therefore I cannot judge as easily whether word vector or glove vector is better for interpreting its context in oyster aquaculture. 
+
+```{r}
+head(oyster_glove)
+head(oyster_word_vec)
+```
+Oyster in the word vector synonym analysis provides words that are strictly informative of the context of oyster aquaculture. When oyster is searched in the glove vector it rears results of a number of sea food names. This is much less useful in the context of oyster aquaculture. 
+
+
